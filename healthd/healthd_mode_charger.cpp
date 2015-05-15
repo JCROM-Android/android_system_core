@@ -228,8 +228,8 @@ static int set_tricolor_led(int on, int color)
         if ((color & leds[i].color) && (access(leds[i].path, R_OK | W_OK) == 0)) {
             fd = open(leds[i].path, O_RDWR);
             if (fd < 0) {
-                LOGE("Could not open red led node\n");
-                goto cleanup;
+                LOGE("Could not open led node %d\n", i);
+                continue;
             }
             if (on)
                 snprintf(buffer, sizeof(int), "%d\n", 255);
@@ -238,9 +238,7 @@ static int set_tricolor_led(int on, int color)
 
             if (write(fd, buffer, strlen(buffer)) < 0)
                 LOGE("Could not write to led node\n");
-cleanup:
-            if (fd >= 0)
-                close(fd);
+            close(fd);
         }
     }
 
@@ -253,7 +251,7 @@ static int set_battery_soc_leds(int soc)
     static int old_color = 0;
 
     for (i = 0; i < (int)ARRAY_SIZE(soc_leds); i++) {
-        if (soc < soc_leds[i].soc)
+        if (soc <= soc_leds[i].soc)
             break;
     }
     color = soc_leds[i].color;
@@ -268,7 +266,7 @@ static int set_battery_soc_leds(int soc)
 }
 
 #define BACKLIGHT_ON_LEVEL    100
-static int set_backlight_on(void)
+static int set_backlight(bool on)
 {
     int fd;
     char buffer[10];
@@ -283,17 +281,14 @@ static int set_backlight_on(void)
     fd = open(BACKLIGHT_PATH, O_RDWR);
     if (fd < 0) {
         LOGE("Could not open backlight node : %s\n", strerror(errno));
-        goto cleanup;
+        return 0;
     }
     LOGV("Enabling backlight\n");
-    snprintf(buffer, sizeof(buffer), "%d\n", BACKLIGHT_ON_LEVEL);
+    snprintf(buffer, sizeof(buffer), "%d\n", on ? BACKLIGHT_ON_LEVEL : 0);
     if (write(fd, buffer,strlen(buffer)) < 0) {
         LOGE("Could not write to backlight node : %s\n", strerror(errno));
-        goto cleanup;
     }
-cleanup:
-    if (fd >= 0)
-        close(fd);
+    close(fd);
 
     return 0;
 }
@@ -494,6 +489,7 @@ static void draw_battery(struct charger *charger)
     }
 }
 
+#ifdef CHARGER_SHOW_PERCENTAGE
 #define STR_LEN    64
 static void draw_capacity(struct charger *charger)
 {
@@ -508,6 +504,7 @@ static void draw_capacity(struct charger *charger)
     android_green();
     gr_text(x, y, cap_str, 0);
 }
+#endif
 
 static void redraw_screen(struct charger *charger)
 {
@@ -520,7 +517,9 @@ static void redraw_screen(struct charger *charger)
         draw_unknown(charger);
     } else {
         draw_battery(charger);
+#ifdef CHARGER_SHOW_PERCENTAGE
         draw_capacity(charger);
+#endif
     }
     gr_flip();
 }
@@ -571,6 +570,7 @@ static void update_screen_state(struct charger *charger, int64_t now)
     if (batt_anim->cur_cycle == batt_anim->num_cycles) {
         reset_animation(batt_anim);
         charger->next_screen_transition = -1;
+        set_backlight(false);
         gr_fb_blank(true);
         LOGV("[%" PRId64 "] animation done\n", now);
         if (charger->charger_connected)
@@ -607,7 +607,7 @@ static void update_screen_state(struct charger *charger, int64_t now)
     /* unblank the screen on first cycle */
     if (batt_anim->cur_cycle == 0) {
         gr_fb_blank(false);
-        set_backlight_on();
+        set_backlight(true);
     }
 
     /* draw the new frame (@ cur_frame) */
@@ -741,6 +741,7 @@ static void process_key(struct charger *charger, int code, int64_t now)
                 } else {
                     reset_animation(batt_anim);
                     charger->next_screen_transition = -1;
+                    set_backlight(false);
                     gr_fb_blank(true);
                     if (charger->charger_connected)
                         request_suspend(true);
@@ -784,6 +785,7 @@ static void handle_power_supply_state(struct charger *charger, int64_t now)
         request_suspend(false);
         if (charger->next_pwr_check == -1) {
             if (mode == QUICKBOOT) {
+                set_backlight(false);
                 gr_fb_blank(true);
                 request_suspend(true);
                 /* exit here. There is no need to keep running when charger
